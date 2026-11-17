@@ -150,7 +150,7 @@ export default function TargetEditor({ initial, onClose }: { initial: Target; on
       }
     >
       <ErrorBanner message={error} />
-      <div className="grid gap-8 lg:grid-cols-[1fr_1fr]">
+      <div className="grid gap-8 lg:grid-cols-2">
         <div className="space-y-8">
           {isNew && (
             <Section title="Type">
