@@ -105,7 +105,7 @@ func TestDropKnownSharedProfiles(t *testing.T) {
 	}
 }
 
-// willowAgentLogs mirrors what the Willow agent sends for Cursor and Pi: the
+// willowAgentLogs mirrors what the Willow agent sends for Cursor, Pi and Antigravity: the
 // prompt as the body of a user_prompt record, metadata in attributes.
 func willowAgentLogs(service string) (telemetry.Payload, plog.ScopeLogs) {
 	ld := plog.NewLogs()
@@ -122,7 +122,7 @@ func willowAgentLogs(service string) (telemetry.Payload, plog.ScopeLogs) {
 }
 
 func TestDropKnownPromptsClearsWillowAgentBodies(t *testing.T) {
-	for _, service := range []string{"cursor", "pi"} {
+	for _, service := range []string{"cursor", "pi", "antigravity"} {
 		p, sl := willowAgentLogs(service)
 
 		known(t, p, Prompts)
@@ -386,7 +386,7 @@ func TestKnownCategoriesListAgents(t *testing.T) {
 		if c.ID != Prompts {
 			continue
 		}
-		for _, a := range []string{"claude-code", "claude-cowork", "codex", "gemini-cli", "qwen-code", "cursor", "pi"} {
+		for _, a := range []string{"claude-code", "claude-cowork", "codex", "gemini-cli", "qwen-code", "cursor", "pi", "antigravity"} {
 			if !slices.Contains(c.Agents, a) {
 				t.Errorf("prompts should list %s, have %v", a, c.Agents)
 			}

@@ -98,10 +98,11 @@ var profiles = map[string]string{
 	"gemini-cli":     "gemini-cli",
 	"qwen-code":      "gemini-cli", // a Gemini CLI fork with the same events
 	"github-copilot": "github-copilot",
-	// Cursor and Pi have no OpenTelemetry export of their own. The Willow agent
-	// sends theirs, with the same records for both.
-	"cursor": "cursor",
-	"pi":     "cursor",
+	// Cursor, Pi and Antigravity have no OpenTelemetry export of their own. The
+	// Willow agent sends theirs, with the same records for all three.
+	"cursor":      "cursor",
+	"pi":          "cursor",
+	"antigravity": "cursor",
 }
 
 var knownDefs = []knownDef{
