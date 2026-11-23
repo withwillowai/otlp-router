@@ -32,7 +32,11 @@ type Config struct {
 	Peers string `yaml:"peers"`
 	// DisableLive hides the UI's live view of recent requests and stops
 	// keeping them in memory.
-	DisableLive bool     `yaml:"disableLive"`
+	DisableLive bool `yaml:"disableLive"`
+	// LiveContent also keeps the telemetry of the latest requests in memory
+	// and shows it on the Live page, as received and as each target got it.
+	// Off by default because it can contain prompts. Ignored when DisableLive.
+	LiveContent bool     `yaml:"liveContent"`
 	Targets     []Target `yaml:"targets"`
 }
 
@@ -222,6 +226,13 @@ func (c *Config) applyEnv() error {
 			return fmt.Errorf("OTLP_ROUTER_DISABLE_LIVE must be true or false: %w", err)
 		}
 		c.DisableLive = disable
+	}
+	if v := os.Getenv("OTLP_ROUTER_LIVE_CONTENT"); v != "" && !c.LiveContent {
+		on, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("OTLP_ROUTER_LIVE_CONTENT must be true or false: %w", err)
+		}
+		c.LiveContent = on
 	}
 
 	org := strings.TrimSpace(os.Getenv("OTLP_ROUTER_WILLOW_ORG"))

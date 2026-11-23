@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/withwillowai/otlp-router/internal/router"
@@ -51,4 +52,45 @@ func (s *server) live(w http.ResponseWriter, r *http.Request) {
 		entries = []router.LiveEntry{}
 	}
 	writeJSON(w, http.StatusOK, liveResponse{Entries: router.NewestLive(entries), Pods: &pods})
+}
+
+// liveContentResponse is one request's telemetry. Available is false when no
+// replica has it: too old, too large, or content is off.
+type liveContentResponse struct {
+	Available bool `json:"available"`
+	router.LiveContent
+}
+
+// internalLiveContent serves the telemetry of a request this replica handled.
+func (s *server) internalLiveContent(w http.ResponseWriter, r *http.Request) {
+	if !s.isPeer(r) || !s.Router.LiveContentEnabled() {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	c, ok := s.Router.LiveContent(r.URL.Query().Get("id"))
+	writeJSON(w, http.StatusOK, liveContentResponse{Available: ok, LiveContent: c})
+}
+
+// liveContent returns the telemetry of one live request, asking the other
+// replicas when this one did not handle it.
+func (s *server) liveContent(w http.ResponseWriter, r *http.Request) {
+	if !s.Router.LiveContentEnabled() {
+		writeError(w, http.StatusNotFound, "the live view does not keep telemetry; turn on liveContent to see it")
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if c, ok := s.Router.LiveContent(id); ok {
+		writeJSON(w, http.StatusOK, liveContentResponse{Available: true, LiveContent: c})
+		return
+	}
+	if s.Config.Peers != "" {
+		got, _ := fanOut[liveContentResponse](r.Context(), s, "/internal/live/content?id="+url.QueryEscape(id))
+		for _, c := range got {
+			if c.Available {
+				writeJSON(w, http.StatusOK, c)
+				return
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, liveContentResponse{})
 }

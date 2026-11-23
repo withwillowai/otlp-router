@@ -39,6 +39,10 @@ readOnly: false
 # replica's memory only. Set false to hide it.
 live:
   enabled: true
+  # Also keep the telemetry of the latest 50 requests in memory and show it on
+  # the Live page, as received and as each target got it. Off by default: it
+  # can contain prompts. Needs live.enabled.
+  content: false
 
 # Built-in Willow target. Adds a target seeded with the privacy preset.
 willow:

@@ -136,3 +136,49 @@ func TestCompileErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyCountingReportsWhatChanged(t *testing.T) {
+	c, err := Compile([]Rule{
+		{Type: Redact, Builtins: true},
+		{Type: MaskAttributes, Keys: []string{"host.name"}},
+		{Type: HashAttributes, Keys: []string{"user.email"}, Salt: "s"},
+		{Type: DropAttributes, Keys: []string{"model"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx := c.ApplyCounting(claudeLogs())
+	want := Effects{Redacted: 2, Masked: 1, Hashed: 2, Removed: 1}
+	if fx != want {
+		t.Fatalf("want %+v, got %+v", want, fx)
+	}
+	if c.Len() != 4 {
+		t.Fatalf("want 4 rules, got %d", c.Len())
+	}
+}
+
+func TestApplyCountingIsEmptyWhenNothingMatches(t *testing.T) {
+	c, err := Compile([]Rule{{Type: Redact, Builtins: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := claudeLogs()
+	c.Apply(p)
+	if fx := c.ApplyCounting(p); fx.Any() {
+		t.Fatalf("a second pass has nothing left to redact, got %+v", fx)
+	}
+	var nilChain *Chain
+	if nilChain.ApplyCounting(p).Any() || nilChain.Len() != 0 {
+		t.Fatal("a nil chain changes nothing")
+	}
+}
+
+func TestApplyCountingKnownCategories(t *testing.T) {
+	drop, err := Compile([]Rule{{Type: DropKnown, Categories: []string{"prompts"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fx := drop.ApplyCounting(claudeLogs()); fx.Removed == 0 {
+		t.Fatalf("dropping prompts should count what it removed, got %+v", fx)
+	}
+}
