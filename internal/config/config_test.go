@@ -48,7 +48,7 @@ func clearRouterEnv(t *testing.T) {
 		"OTLP_ROUTER_ADMIN_PASSWORD_HASH", "OTLP_ROUTER_SESSION_SECRET", "OTLP_ROUTER_INGEST_TOKENS",
 		"OTLP_ROUTER_STORE", "OTLP_ROUTER_STORE_PATH", "OTLP_ROUTER_WILLOW_ORG",
 		"OTLP_ROUTER_WILLOW_REGION", "OTLP_ROUTER_WILLOW_CONNECT_URL", "WILLOW_OTLP_TOKEN",
-		"OTLP_ROUTER_PEERS", "OTLP_ROUTER_DISABLE_LIVE",
+		"OTLP_ROUTER_PEERS", "OTLP_ROUTER_DISABLE_LIVE", "OTLP_ROUTER_LIVE_CONTENT",
 	} {
 		t.Setenv(name, "")
 	}
@@ -116,6 +116,23 @@ func TestLiveIsOnUnlessDisabled(t *testing.T) {
 		t.Fatalf("OTLP_ROUTER_DISABLE_LIVE=true should turn it off: %v", err)
 	}
 	t.Setenv("OTLP_ROUTER_DISABLE_LIVE", "maybe")
+	if _, err = Load(""); err == nil {
+		t.Fatal("want an error for a value that is not a boolean")
+	}
+}
+
+func TestLiveContentIsOffUnlessEnabled(t *testing.T) {
+	clearRouterEnv(t)
+	t.Setenv("OTLP_ROUTER_ADMIN_PASSWORD", "pw")
+	cfg, err := Load("")
+	if err != nil || cfg.LiveContent {
+		t.Fatalf("live content should be off by default: %v %+v", err, cfg)
+	}
+	t.Setenv("OTLP_ROUTER_LIVE_CONTENT", "true")
+	if cfg, err = Load(""); err != nil || !cfg.LiveContent {
+		t.Fatalf("OTLP_ROUTER_LIVE_CONTENT=true should turn it on: %v", err)
+	}
+	t.Setenv("OTLP_ROUTER_LIVE_CONTENT", "maybe")
 	if _, err = Load(""); err == nil {
 		t.Fatal("want an error for a value that is not a boolean")
 	}

@@ -73,10 +73,35 @@ var SecretPatterns = []SecretPattern{
 	{ID: "private_key", Name: "Private keys", Pattern: `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`},
 }
 
-type step func(p telemetry.Payload)
+// Effects counts what a chain changed in one payload, for the live view. Items
+// the rules dropped whole are not counted here; compare the payload's items
+// before and after.
+type Effects struct {
+	// Redacted is the secrets and pattern matches replaced inside text.
+	Redacted int `json:"redacted,omitempty"`
+	// Masked is the attribute values replaced with [REDACTED] by key.
+	Masked int `json:"masked,omitempty"`
+	// Hashed is the values replaced by a salted hash.
+	Hashed int `json:"hashed,omitempty"`
+	// Removed is the attribute values and log bodies taken out.
+	Removed int `json:"removed,omitempty"`
+}
+
+// Any reports whether the chain changed anything.
+func (e Effects) Any() bool { return e != Effects{} }
+
+type step func(p telemetry.Payload, fx *Effects)
 
 // Chain is a compiled, reusable rule list.
 type Chain struct{ steps []step }
+
+// Len is the number of rules in the chain.
+func (c *Chain) Len() int {
+	if c == nil {
+		return 0
+	}
+	return len(c.steps)
+}
 
 func Compile(rules []Rule) (*Chain, error) {
 	c := &Chain{}
@@ -90,13 +115,18 @@ func Compile(rules []Rule) (*Chain, error) {
 	return c, nil
 }
 
-func (c *Chain) Apply(p telemetry.Payload) {
+func (c *Chain) Apply(p telemetry.Payload) { c.ApplyCounting(p) }
+
+// ApplyCounting runs the chain on p and reports what it changed.
+func (c *Chain) ApplyCounting(p telemetry.Payload) Effects {
+	var fx Effects
 	if c == nil {
-		return
+		return fx
 	}
 	for _, s := range c.steps {
-		s(p)
+		s(p, &fx)
 	}
+	return fx
 }
 
 func compile(r Rule) (step, error) {
@@ -111,10 +141,10 @@ func compile(r Rule) (step, error) {
 			return nil, fmt.Errorf("level must be resource or record")
 		}
 		onMap := attributeAction(r, match)
-		return func(p telemetry.Payload) {
+		return func(p telemetry.Payload, fx *Effects) {
 			p.WalkAttributes(func(m pcommon.Map, l telemetry.Level) {
 				if level == "" || level == l {
-					onMap(m)
+					onMap(m, fx)
 				}
 			})
 		}, nil
@@ -124,7 +154,7 @@ func compile(r Rule) (step, error) {
 		if err != nil {
 			return nil, err
 		}
-		return func(p telemetry.Payload) {
+		return func(p telemetry.Payload, _ *Effects) {
 			p.RemoveLogRecordsIf(func(lr plog.LogRecord) bool {
 				for _, n := range eventNames(lr) {
 					if match(n) {
@@ -140,7 +170,7 @@ func compile(r Rule) (step, error) {
 		if err != nil {
 			return nil, err
 		}
-		return func(p telemetry.Payload) {
+		return func(p telemetry.Payload, _ *Effects) {
 			p.RemoveSpansIf(func(s ptrace.Span) bool { return match(s.Name()) })
 		}, nil
 
@@ -149,7 +179,7 @@ func compile(r Rule) (step, error) {
 		if err != nil {
 			return nil, err
 		}
-		return func(p telemetry.Payload) {
+		return func(p telemetry.Payload, _ *Effects) {
 			p.RemoveMetricsIf(func(m pmetric.Metric) bool { return match(m.Name()) })
 		}, nil
 
@@ -176,13 +206,16 @@ func compile(r Rule) (step, error) {
 			}
 			res = append(res, re)
 		}
-		redact := func(s string) string {
-			for _, re := range res {
-				s = re.ReplaceAllString(s, Masked)
+		return func(p telemetry.Payload, fx *Effects) {
+			redact := func(s string) string {
+				for _, re := range res {
+					s = re.ReplaceAllStringFunc(s, func(string) string {
+						fx.Redacted++
+						return Masked
+					})
+				}
+				return s
 			}
-			return s
-		}
-		return func(p telemetry.Payload) {
 			p.WalkLogBodies(func(v pcommon.Value) { redactValue(v, redact) })
 			p.WalkAttributes(func(m pcommon.Map, _ telemetry.Level) {
 				m.Range(func(_ string, v pcommon.Value) bool {
@@ -201,26 +234,34 @@ func compile(r Rule) (step, error) {
 	return nil, fmt.Errorf("unknown rule type")
 }
 
-func attributeAction(r Rule, match func(string) bool) func(pcommon.Map) {
+func attributeAction(r Rule, match func(string) bool) func(pcommon.Map, *Effects) {
 	switch r.Type {
 	case DropAttributes:
-		return func(m pcommon.Map) {
-			m.RemoveIf(func(k string, _ pcommon.Value) bool { return match(k) })
+		return func(m pcommon.Map, fx *Effects) {
+			m.RemoveIf(func(k string, _ pcommon.Value) bool {
+				if match(k) {
+					fx.Removed++
+					return true
+				}
+				return false
+			})
 		}
 	case MaskAttributes:
-		return func(m pcommon.Map) {
+		return func(m pcommon.Map, fx *Effects) {
 			m.Range(func(k string, v pcommon.Value) bool {
 				if match(k) {
 					v.SetStr(Masked)
+					fx.Masked++
 				}
 				return true
 			})
 		}
 	default:
-		return func(m pcommon.Map) {
+		return func(m pcommon.Map, fx *Effects) {
 			m.Range(func(k string, v pcommon.Value) bool {
 				if match(k) {
 					v.SetStr(hashValue(r.Salt, v))
+					fx.Hashed++
 				}
 				return true
 			})

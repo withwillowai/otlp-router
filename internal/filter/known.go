@@ -298,9 +298,12 @@ func newKnownSet(parts []agentNames, hash func(pcommon.Value)) *knownSet {
 }
 
 // clearBody empties the body of a record whose event is in bodies.
-func (s *knownSet) clearBody(lr plog.LogRecord) {
+func (s *knownSet) clearBody(lr plog.LogRecord, fx *Effects) {
 	for _, n := range eventNames(lr) {
 		if s.bodies(n) {
+			if lr.Body().Type() != pcommon.ValueTypeEmpty {
+				fx.Removed++
+			}
 			pcommon.NewValueEmpty().CopyTo(lr.Body())
 			return
 		}
@@ -321,14 +324,21 @@ func (s *knownSet) dropRecord(lr plog.LogRecord) bool {
 	return false
 }
 
-func (s *knownSet) attrs(m pcommon.Map) {
+func (s *knownSet) attrs(m pcommon.Map, fx *Effects) {
 	if s.hash == nil {
-		m.RemoveIf(func(k string, _ pcommon.Value) bool { return s.attributes(k) })
+		m.RemoveIf(func(k string, _ pcommon.Value) bool {
+			if s.attributes(k) {
+				fx.Removed++
+				return true
+			}
+			return false
+		})
 		return
 	}
 	m.Range(func(k string, v pcommon.Value) bool {
 		if s.attributes(k) {
 			s.hash(v)
+			fx.Hashed++
 		}
 		return true
 	})
@@ -373,17 +383,17 @@ func compileKnown(categories []string, hash func(pcommon.Value)) (step, error) {
 		}
 		return unknown
 	}
-	return func(p telemetry.Payload) { applyKnown(p, setFor) }, nil
+	return func(p telemetry.Payload, fx *Effects) { applyKnown(p, setFor, fx) }, nil
 }
 
 // applyKnown runs each scope through its agent's set. A resource is handled
 // once, with the set of its first scope, so hashing never applies twice.
-func applyKnown(p telemetry.Payload, setFor func(pcommon.Resource, string) *knownSet) {
+func applyKnown(p telemetry.Payload, setFor func(pcommon.Resource, string) *knownSet, fx *Effects) {
 	switch p.Signal {
 	case telemetry.Logs:
 		p.Logs.ResourceLogs().RemoveIf(func(r plog.ResourceLogs) bool {
 			if r.ScopeLogs().Len() > 0 {
-				defer setFor(r.Resource(), r.ScopeLogs().At(0).Scope().Name()).attrs(r.Resource().Attributes())
+				defer setFor(r.Resource(), r.ScopeLogs().At(0).Scope().Name()).attrs(r.Resource().Attributes(), fx)
 			}
 			r.ScopeLogs().RemoveIf(func(sl plog.ScopeLogs) bool {
 				s := setFor(r.Resource(), sl.Scope().Name())
@@ -391,8 +401,8 @@ func applyKnown(p telemetry.Payload, setFor func(pcommon.Resource, string) *know
 					if s.dropRecord(lr) {
 						return true
 					}
-					s.clearBody(lr)
-					s.attrs(lr.Attributes())
+					s.clearBody(lr, fx)
+					s.attrs(lr.Attributes(), fx)
 					return false
 				})
 				return sl.LogRecords().Len() == 0
@@ -412,22 +422,22 @@ func applyKnown(p telemetry.Payload, setFor func(pcommon.Resource, string) *know
 				s := setFor(r.Resource(), ss.Scope().Name())
 				for k := 0; k < ss.Spans().Len(); k++ {
 					span := ss.Spans().At(k)
-					s.attrs(span.Attributes())
+					s.attrs(span.Attributes(), fx)
 					span.Events().RemoveIf(func(e ptrace.SpanEvent) bool {
 						if s.events(e.Name()) {
 							return true
 						}
-						s.attrs(e.Attributes())
+						s.attrs(e.Attributes(), fx)
 						return false
 					})
 				}
 			}
-			resourceSet.attrs(r.Resource().Attributes())
+			resourceSet.attrs(r.Resource().Attributes(), fx)
 		}
 	case telemetry.Metrics:
 		p.Metrics.ResourceMetrics().RemoveIf(func(r pmetric.ResourceMetrics) bool {
 			if r.ScopeMetrics().Len() > 0 {
-				defer setFor(r.Resource(), r.ScopeMetrics().At(0).Scope().Name()).attrs(r.Resource().Attributes())
+				defer setFor(r.Resource(), r.ScopeMetrics().At(0).Scope().Name()).attrs(r.Resource().Attributes(), fx)
 			}
 			r.ScopeMetrics().RemoveIf(func(sm pmetric.ScopeMetrics) bool {
 				s := setFor(r.Resource(), sm.Scope().Name())
@@ -435,7 +445,7 @@ func applyKnown(p telemetry.Payload, setFor func(pcommon.Resource, string) *know
 					if s.metrics(m.Name()) {
 						return true
 					}
-					telemetry.WalkDataPoints(m, s.attrs)
+					telemetry.WalkDataPoints(m, func(a pcommon.Map) { s.attrs(a, fx) })
 					return false
 				})
 				return sm.Metrics().Len() == 0

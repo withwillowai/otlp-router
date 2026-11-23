@@ -68,6 +68,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /metrics", s.metrics)
 	mux.HandleFunc("GET /internal/stats", s.internalStats)
 	mux.HandleFunc("GET /internal/live", s.internalLive)
+	mux.HandleFunc("GET /internal/live/content", s.internalLiveContent)
 
 	mux.HandleFunc("GET /api/session", s.getSession)
 	mux.HandleFunc("POST /api/login", s.login)
@@ -76,6 +77,7 @@ func (s *server) routes() http.Handler {
 	mux.Handle("GET /api/info", s.authed(s.info))
 	mux.Handle("GET /api/stats", s.authed(s.stats))
 	mux.Handle("GET /api/live", s.authed(s.live))
+	mux.Handle("GET /api/live/content", s.authed(s.liveContent))
 	mux.Handle("GET /api/targets", s.authed(s.listTargets))
 	mux.Handle("POST /api/targets", s.mutating(s.createTarget))
 	mux.Handle("PUT /api/targets/{id}", s.mutating(s.updateTarget))
@@ -167,6 +169,7 @@ func (s *server) info(w http.ResponseWriter, _ *http.Request) {
 		"ingestAuth":     !s.Config.Auth.AllowUnauthenticatedIngest,
 		"readOnly":       s.Config.ReadOnly,
 		"live":           s.Router.LiveEnabled(),
+		"liveContent":    s.Router.LiveContentEnabled(),
 		"store":          s.Store.Kind(),
 		"listen":         s.Config.Listen,
 		"secretPatterns": filter.SecretPatterns,

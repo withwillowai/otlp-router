@@ -21,6 +21,7 @@ data:
       allowUnauthenticatedIngest: {{ .Values.auth.allowUnauthenticatedIngest }}
     readOnly: {{ .Values.readOnly }}
     disableLive: {{ not .Values.live.enabled }}
+    liveContent: {{ .Values.live.content | default false }}
     store:
       type: configmap
       configMap:

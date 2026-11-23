@@ -29,10 +29,19 @@ type LiveTarget struct {
 	Status string `json:"status"`
 	Items  int    `json:"items"`
 	Error  string `json:"error,omitempty"`
+	// Rules is how many filter rules the target ran on the request. The counts
+	// below are what they changed; a target with rules and zero counts had
+	// nothing to change.
+	Rules        int `json:"rules,omitempty"`
+	Redacted     int `json:"redacted,omitempty"`
+	Masked       int `json:"masked,omitempty"`
+	Hashed       int `json:"hashed,omitempty"`
+	Removed      int `json:"removed,omitempty"`
+	ItemsRemoved int `json:"itemsRemoved,omitempty"`
 }
 
 // LiveEntry describes one ingest request: who sent it and where it went. It
-// never holds the telemetry itself.
+// never holds the telemetry itself; see LiveContent for the opt-in copy.
 type LiveEntry struct {
 	ID        string         `json:"id"`
 	Time      int64          `json:"time"`
@@ -88,8 +97,17 @@ func (l *liveLog) result(seq uint64, r exporter.Result) {
 		return
 	}
 	t := LiveTarget{ID: r.Target, Status: r.Status, Items: r.Items, Error: r.Error}
+	if f := r.Filtered; f != nil {
+		t.Rules, t.ItemsRemoved = f.Rules, f.ItemsRemoved
+		t.Redacted, t.Masked, t.Hashed, t.Removed = f.Effects.Redacted, f.Effects.Masked, f.Effects.Hashed, f.Effects.Removed
+	}
 	e := &rec.entry
 	if i := slices.IndexFunc(e.Targets, func(x LiveTarget) bool { return x.ID == t.ID }); i >= 0 {
+		if r.Filtered == nil {
+			// Later results (sent, retrying, failed) keep what the filters did.
+			prev := e.Targets[i]
+			t.Rules, t.Redacted, t.Masked, t.Hashed, t.Removed, t.ItemsRemoved = prev.Rules, prev.Redacted, prev.Masked, prev.Hashed, prev.Removed, prev.ItemsRemoved
+		}
 		e.Targets[i] = t
 	} else {
 		e.Targets = append(e.Targets, t)
@@ -156,11 +174,19 @@ func (r *Router) recordLive(p telemetry.Payload) uint64 {
 	e := liveEntry(p.Signal, p.Headers)
 	e.Status, e.Items, e.Agents, e.Token = LiveAccepted, p.Items(), p.AgentCounts(), p.TokenName
 	e.Names = p.Names(liveNames)
-	return r.live.add(e)
+	seq := r.live.add(e)
+	if r.liveContent != nil {
+		r.liveContent.received(seq, p)
+	}
+	return seq
 }
 
 func (r *Router) reportLive(seq uint64, res exporter.Result) {
-	if r.live != nil {
-		r.live.result(seq, res)
+	if r.live == nil {
+		return
+	}
+	r.live.result(seq, res)
+	if r.liveContent != nil && res.Payload != nil {
+		r.liveContent.sent(seq, res.Target, *res.Payload)
 	}
 }

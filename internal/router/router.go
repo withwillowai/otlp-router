@@ -36,6 +36,9 @@ type Router struct {
 	ingest  ingestStats
 	samples samples
 	live    *liveLog
+	// liveContent keeps the telemetry of the latest requests, off unless
+	// EnableLiveContent is called.
+	liveContent *liveContentLog
 }
 
 func New(st store.Store, log *slog.Logger) *Router {

@@ -75,6 +75,8 @@ func run(configPath string, log *slog.Logger) error {
 	rt.SetIngestAuth(cfg.Auth.IngestTokens, cfg.Auth.AllowUnauthenticatedIngest)
 	if cfg.DisableLive {
 		rt.DisableLive()
+	} else if cfg.LiveContent {
+		rt.EnableLiveContent()
 	}
 	if err := rt.Init(ctx, cfg.Targets); err != nil {
 		return fmt.Errorf("load targets: %w", err)

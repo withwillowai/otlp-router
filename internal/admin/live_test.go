@@ -83,3 +83,47 @@ func TestLiveSingleReplicaAndDisabled(t *testing.T) {
 		t.Fatalf("disabled: want 404, got %d", code)
 	}
 }
+
+func getLiveContent(t *testing.T, s *server, id string) (int, liveContentResponse) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.liveContent(rec, httptest.NewRequest("GET", "/api/live/content?id="+id, nil))
+	var out liveContentResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	return rec.Code, out
+}
+
+func TestLiveContentOffByDefault(t *testing.T) {
+	s := peerServer(t)
+	if code, _ := getLiveContent(t, s, "a-1"); code != http.StatusNotFound {
+		t.Fatalf("want 404 while content is off, got %d", code)
+	}
+	req := httptest.NewRequest("GET", "/internal/live/content?id=a-1", nil)
+	req.Header.Set(peerHeader, s.peerToken())
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("peers get 404 too, got %d", rec.Code)
+	}
+}
+
+func TestLiveContentAsksTheReplicaThatHasIt(t *testing.T) {
+	s := peerServer(t)
+	s.Router.EnableLiveContent()
+	has := fakePeer(t, s.peerToken(), "/internal/live/content", liveContentResponse{
+		Available:   true,
+		LiveContent: router.LiveContent{Received: json.RawMessage(`{"resourceLogs":[]}`)},
+	})
+	hasNot := fakePeer(t, s.peerToken(), "/internal/live/content", liveContentResponse{})
+	s.resolvePeers = func(context.Context) ([]string, error) { return []string{hasNot, has}, nil }
+
+	code, got := getLiveContent(t, s, "other-7")
+	if code != http.StatusOK || !got.Available || string(got.Received) != `{"resourceLogs":[]}` {
+		t.Fatalf("want the other replica's telemetry, got %d %+v", code, got)
+	}
+
+	s.resolvePeers = func(context.Context) ([]string, error) { return []string{hasNot}, nil }
+	if code, got = getLiveContent(t, s, "other-7"); code != http.StatusOK || got.Available {
+		t.Fatalf("want unavailable when no replica has it, got %d %+v", code, got)
+	}
+}

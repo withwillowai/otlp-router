@@ -1,7 +1,18 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react"
-import { ChevronRight, Pause, Play, Radio, Trash2 } from "lucide-react"
-import { SIGNALS, api, formatNumber, type LiveEntry, type LiveTargetStatus, type PodsReport, type Signal } from "../api"
+import { ChevronRight, Eye, Pause, Play, Radio, ShieldCheck, Trash2 } from "lucide-react"
+import {
+  SIGNALS,
+  api,
+  formatNumber,
+  type LiveContent,
+  type LiveEntry,
+  type LiveTarget,
+  type LiveTargetStatus,
+  type PodsReport,
+  type Signal
+} from "../api"
 import { useRouterData } from "../App"
+import { JsonViewer } from "../json"
 import { AgentName, ErrorBanner, PageHeader } from "../ui"
 import { PodsNotice } from "./Overview"
 
@@ -23,6 +34,24 @@ const NAMES_LABEL: Record<Signal, string> = { traces: "Span names", metrics: "Me
 
 function hasProblem(e: LiveEntry): boolean {
   return e.status === "rejected" || (e.targets ?? []).some((t) => ["failed", "dropped", "retrying"].includes(t.status))
+}
+
+/** Every kind of change a target's filters made, in the order shown. */
+function changes(t: LiveTarget): string[] {
+  const out: string[] = []
+  if (t.redacted) out.push(`${formatNumber(t.redacted)} ${t.redacted === 1 ? "secret" : "secrets"} redacted`)
+  if (t.masked) out.push(`${formatNumber(t.masked)} masked`)
+  if (t.hashed) out.push(`${formatNumber(t.hashed)} hashed`)
+  if (t.removed) out.push(`${formatNumber(t.removed)} removed`)
+  if (t.itemsRemoved) out.push(`${formatNumber(t.itemsRemoved)} ${t.itemsRemoved === 1 ? "record" : "records"} dropped`)
+  return out
+}
+
+/** What a target's filters did, in words. */
+function filterSummary(t: LiveTarget): string {
+  const done = changes(t)
+  if (done.length) return done.join(", ")
+  return t.rules ? `Nothing to change (${t.rules} ${t.rules === 1 ? "rule" : "rules"})` : "No filters, sent as received"
 }
 
 function clock(ms: number): string {
@@ -75,7 +104,7 @@ function useLive(paused: boolean) {
 }
 
 export default function Live() {
-  const { targets } = useRouterData()
+  const { targets, info } = useRouterData()
   const [paused, setPaused] = useState(false)
   const [signal, setSignal] = useState<Signal | "all">("all")
   const [problemsOnly, setProblemsOnly] = useState(false)
@@ -101,7 +130,11 @@ export default function Live() {
     <>
       <PageHeader
         title="Live"
-        description="The latest requests agents sent to this router and what each target did with them. Only who sent what and where it went is kept, never the telemetry itself, and only in memory."
+        description={
+          info?.liveContent
+            ? "The latest requests agents sent to this router, what each target did with them, and whether its filters redacted anything. Kept only in memory. The telemetry of the newest requests can be opened to check."
+            : "The latest requests agents sent to this router, what each target did with them, and whether its filters redacted anything. Only who sent what and where it went is kept, never the telemetry itself, and only in memory."
+        }
         action={
           <div className="flex gap-2">
             <button className="btn-ghost" onClick={() => setPaused(!paused)}>
@@ -141,7 +174,14 @@ export default function Live() {
           </div>
         ) : (
           shown.map((e) => (
-            <Row key={e.id} entry={e} targetName={targetName} open={expanded.has(e.id)} onToggle={() => toggle(e.id)} />
+            <Row
+              key={e.id}
+              entry={e}
+              targetName={targetName}
+              content={!!info?.liveContent}
+              open={expanded.has(e.id)}
+              onToggle={() => toggle(e.id)}
+            />
           ))
         )}
       </section>
@@ -152,11 +192,13 @@ export default function Live() {
 function Row({
   entry: e,
   targetName,
+  content,
   open,
   onToggle
 }: {
   entry: LiveEntry
   targetName: (id: string) => string
+  content: boolean
   open: boolean
   onToggle: () => void
 }) {
@@ -197,10 +239,11 @@ function Row({
           {(e.targets ?? []).map((t) => (
             <span
               key={t.id}
-              title={t.error}
-              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs ${STATUS_STYLE[t.status]}`}
+              title={t.error ?? filterSummary(t)}
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs ${STATUS_STYLE[t.status]}`}
             >
               {targetName(t.id)}: {t.status}
+              {changes(t).length > 0 && <ShieldCheck className="size-3" aria-label="Filters changed the data" />}
             </span>
           ))}
           {e.status === "accepted" && !e.targets?.length && <span className="text-xs text-faint">no target took it</span>}
@@ -215,12 +258,12 @@ function Row({
             ))}
         </div>
       </button>
-      {open && <Details entry={e} targetName={targetName} />}
+      {open && <Details entry={e} targetName={targetName} content={content} />}
     </div>
   )
 }
 
-function Details({ entry: e, targetName }: { entry: LiveEntry; targetName: (id: string) => string }) {
+function Details({ entry: e, targetName, content }: { entry: LiveEntry; targetName: (id: string) => string; content: boolean }) {
   const names = Object.entries(e.names ?? {}).sort((a, b) => b[1] - a[1])
   const agents = Object.entries(e.agents ?? {}).sort((a, b) => b[1] - a[1])
   const fields: [string, ReactNode][] = [
@@ -229,6 +272,7 @@ function Details({ entry: e, targetName }: { entry: LiveEntry; targetName: (id: 
     ["Signal", e.signal || "unknown"],
     ["Status", e.status === "rejected" ? <span className="text-danger">rejected</span> : "accepted"],
     ["Items", formatNumber(e.items)],
+    ...(e.status === "accepted" ? ([["Redaction", <Redaction targets={e.targets ?? []} targetName={targetName} />]] as [string, ReactNode][]) : []),
     ["User", e.user],
     ["Device", e.device],
     ["Ingest token", e.token],
@@ -282,6 +326,7 @@ function Details({ entry: e, targetName }: { entry: LiveEntry; targetName: (id: 
                 <th className="py-1 pr-4 font-medium">Target</th>
                 <th className="py-1 pr-4 font-medium">Status</th>
                 <th className="py-1 pr-4 font-medium">Items</th>
+                <th className="py-1 pr-4 font-medium">Filters</th>
                 <th className="py-1 font-medium">Error</th>
               </tr>
             </thead>
@@ -293,6 +338,7 @@ function Details({ entry: e, targetName }: { entry: LiveEntry; targetName: (id: 
                     <span className={`inline-flex rounded-full border px-2 py-0.5 ${STATUS_STYLE[t.status]}`}>{t.status}</span>
                   </td>
                   <td className="py-1.5 pr-4 tabular-nums">{t.status === "filtered" ? "0" : formatNumber(t.items)}</td>
+                  <td className={`py-1.5 pr-4 ${changes(t).length ? "text-fg" : "text-faint"}`}>{filterSummary(t)}</td>
                   <td className="py-1.5 break-all text-danger">{t.error}</td>
                 </tr>
               ))}
@@ -301,9 +347,85 @@ function Details({ entry: e, targetName }: { entry: LiveEntry; targetName: (id: 
         </div>
       )}
 
+      {content && <Content entry={e} targetName={targetName} />}
+
       <p className="text-[11px] text-faint">
-        The router keeps only these details. The telemetry itself is forwarded and never stored.
+        {content
+          ? "The router keeps these details, and the telemetry of the newest requests in memory only. Nothing is written to disk."
+          : "The router keeps only these details. The telemetry itself is forwarded and never stored."}
       </p>
+    </div>
+  )
+}
+
+/** Whether any target's filters changed this request, and which. */
+function Redaction({ targets, targetName }: { targets: LiveTarget[]; targetName: (id: string) => string }) {
+  if (targets.length === 0) return null
+  const changed = targets.filter((t) => changes(t).length > 0)
+  if (changed.length === 0) {
+    return targets.some((t) => t.rules)
+      ? "No, the filters found nothing to change"
+      : "No, no target has filters"
+  }
+  return (
+    <div className="space-y-0.5">
+      <div className="inline-flex items-center gap-1.5 font-medium text-success">
+        <ShieldCheck className="size-3.5" /> Yes
+      </div>
+      {changed.map((t) => (
+        <div key={t.id} className="text-muted">
+          {targetName(t.id)}: {changes(t).join(", ")}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** The request's telemetry, loaded on demand: as received and as each target got it. */
+function Content({ entry: e, targetName }: { entry: LiveEntry; targetName: (id: string) => string }) {
+  const [state, setState] = useState<{ content?: LiveContent; error?: string; loading?: boolean }>({})
+  const load = async () => {
+    setState({ loading: true })
+    try {
+      setState({ content: await api.liveContent(e.id) })
+    } catch (err) {
+      setState({ error: (err as Error).message })
+    }
+  }
+  const { content } = state
+  return (
+    <div>
+      <div className="label">Telemetry</div>
+      {!content && (
+        <button className="btn-ghost" onClick={load} disabled={state.loading}>
+          <Eye className="size-4" /> {state.loading ? "Loading" : "Show telemetry"}
+        </button>
+      )}
+      {state.error && <p className="mt-2 text-xs text-danger">{state.error}</p>}
+      {content && !content.available && (
+        <p className="text-xs text-muted">
+          The telemetry of this request is no longer kept. Only the newest requests keep it.
+        </p>
+      )}
+      {content?.available && content.skipped && <p className="text-xs text-muted">{content.skipped}</p>}
+      {content?.available && !content.skipped && (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <JsonViewer title="Received" value={content.received} />
+          {(e.targets ?? []).map((t) => {
+            const sent = content.targets?.[t.id]
+            return sent === undefined ? (
+              <div key={t.id}>
+                <div className="mb-1 text-[11px] tracking-wide text-primary uppercase">Sent to {targetName(t.id)}</div>
+                <p className="text-xs text-muted">
+                  {t.status === "filtered" ? "Nothing: the filters removed everything." : "Not kept."}
+                </p>
+              </div>
+            ) : (
+              <JsonViewer key={t.id} title={`Sent to ${targetName(t.id)}`} value={sent} highlight />
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

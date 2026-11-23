@@ -109,9 +109,31 @@ export interface LiveTarget {
   status: LiveTargetStatus
   items: number
   error?: string
+  /** Filter rules the target ran. With none, the data went as received. */
+  rules?: number
+  /** Secrets and pattern matches replaced inside text. */
+  redacted?: number
+  /** Values replaced with [REDACTED] by key. */
+  masked?: number
+  hashed?: number
+  /** Attribute values and log bodies taken out. */
+  removed?: number
+  /** Records, spans or data points the filters dropped whole. */
+  itemsRemoved?: number
 }
 
-/** One ingest request: who sent it and where it went. Never the telemetry itself. */
+/** The telemetry of one request, kept only when the router runs with liveContent. */
+export interface LiveContent {
+  available: boolean
+  /** OTLP JSON before any target's filters. */
+  received?: unknown
+  /** OTLP JSON each target was given, by target id. */
+  targets?: Record<string, unknown>
+  /** Why nothing was kept, e.g. the request was too large. */
+  skipped?: string
+}
+
+/** One ingest request: who sent it and where it went. The telemetry is in LiveContent. */
 export interface LiveEntry {
   id: string
   time: number
@@ -165,6 +187,8 @@ export interface Info {
   ingestAuth: boolean
   readOnly: boolean
   live: boolean
+  /** The router keeps the telemetry of the latest requests for the Live page. */
+  liveContent: boolean
   store: string
   listen: { OTLPGRPC: string; OTLPHTTP: string; Admin: string }
   secretPatterns: SecretPattern[]
@@ -238,6 +262,7 @@ export const api = {
   info: () => request<Info>("GET", "/api/info"),
   stats: () => request<Stats>("GET", "/api/stats"),
   live: (since: number) => request<LiveResponse>("GET", `/api/live?since=${since}`),
+  liveContent: (id: string) => request<LiveContent>("GET", `/api/live/content?id=${encodeURIComponent(id)}`),
   targets: () => request<TargetsResponse>("GET", "/api/targets"),
   createTarget: (target: Target, version: string) =>
     request<TargetsResponse>("POST", "/api/targets", { target, version }),

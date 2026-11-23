@@ -51,6 +51,19 @@ type Result struct {
 	Status string
 	Items  int
 	Error  string
+	// Set only on the first result of a payload at a target, when the filters
+	// have run: how many rules there were, what they changed, and how many
+	// items they dropped whole.
+	Filtered *Filtered
+	// Payload is what the target gets, set with Filtered. Treat it as read-only.
+	Payload *telemetry.Payload
+}
+
+// Filtered is what a target's filters did to one payload.
+type Filtered struct {
+	Rules        int
+	Effects      filter.Effects
+	ItemsRemoved int
 }
 
 // Reporter receives the result of payloads that carry a LiveID.
@@ -111,28 +124,33 @@ func (e *Exporter) Offer(p telemetry.Payload) {
 	}
 	c := p.Clone()
 	c.KeepAgents(e.Target.Agents)
-	e.chain.Apply(c)
+	before := c.Items()
+	fx := e.chain.ApplyCounting(c)
+	f := &Filtered{Rules: e.chain.Len(), Effects: fx, ItemsRemoved: before - c.Items()}
 	if c.Empty() {
 		e.stats.filtered.Add(1)
-		e.result(c, StatusFiltered, nil)
+		e.result(c, StatusFiltered, nil, f)
 		return
 	}
 	select {
 	case e.queue <- c:
-		e.result(c, StatusQueued, nil)
+		e.result(c, StatusQueued, nil, f)
 	default:
 		err := fmt.Errorf("queue full, dropped %d %s", c.Items(), c.Signal)
 		e.stats.dropped.Add(int64(c.Items()))
 		e.stats.setError(err)
-		e.result(c, StatusDropped, err)
+		e.result(c, StatusDropped, err, f)
 	}
 }
 
-func (e *Exporter) result(p telemetry.Payload, status string, err error) {
+func (e *Exporter) result(p telemetry.Payload, status string, err error, f *Filtered) {
 	if e.report == nil || p.LiveID == 0 {
 		return
 	}
-	r := Result{Target: e.Target.ID, Status: status, Items: p.Items()}
+	r := Result{Target: e.Target.ID, Status: status, Items: p.Items(), Filtered: f}
+	if f != nil {
+		r.Payload = &p
+	}
 	if err != nil {
 		r.Error = err.Error()
 	}
@@ -196,25 +214,25 @@ func (e *Exporter) deliver(p telemetry.Payload) {
 			e.stats.sent.Add(int64(p.Items()))
 			e.stats.batches.Add(1)
 			e.stats.lastSuccess.Store(time.Now().UnixMilli())
-			e.result(p, StatusSent, nil)
+			e.result(p, StatusSent, nil, nil)
 			return
 		}
 		var perm permanentError
 		if errors.As(err, &perm) || time.Since(start)+backoff > maxRetryElapsed || e.ctx.Err() != nil {
 			e.stats.failed.Add(int64(p.Items()))
 			e.stats.setError(err)
-			e.result(p, StatusFailed, err)
+			e.result(p, StatusFailed, err, nil)
 			e.log.Warn("export failed", "signal", p.Signal, "items", p.Items(), "err", err)
 			return
 		}
 		e.stats.retries.Add(1)
 		e.stats.setError(fmt.Errorf("retrying: %w", err))
-		e.result(p, StatusRetrying, err)
+		e.result(p, StatusRetrying, err, nil)
 		select {
 		case <-time.After(backoff):
 		case <-e.ctx.Done():
 			e.stats.failed.Add(int64(p.Items()))
-			e.result(p, StatusFailed, err)
+			e.result(p, StatusFailed, err, nil)
 			return
 		}
 		backoff = min(backoff*2, maxBackoff)

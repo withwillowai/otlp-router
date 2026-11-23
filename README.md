@@ -98,6 +98,7 @@ To send to Willow as well, add:
 | `WILLOW_OTLP_TOKEN`               | Your org's Willow OTLP token, required with the Willow variables above        |
 | `OTLP_ROUTER_PEERS`               | Only for several replicas: `host:port` resolving to all of them, e.g. a Compose service name with `:8080`. The UI then adds up their stats. Needs the same `OTLP_ROUTER_SESSION_SECRET` on every replica |
 | `OTLP_ROUTER_DISABLE_LIVE`        | `true` hides the UI's Live page of recent requests and keeps none in memory   |
+| `OTLP_ROUTER_LIVE_CONTENT`        | `true` also keeps the telemetry of the latest requests, to show on Live       |
 
 The Willow target is only added when the store has no targets yet; after that, edit it in the UI.
 
@@ -237,6 +238,14 @@ keeps its last 1,000 requests in memory, and with `peers` set the page shows eve
 It is on by default; set `disableLive: true` (Helm `live.enabled: false`, or `OTLP_ROUTER_DISABLE_LIVE=true`) to hide
 the page and keep nothing.
 
+Each target also shows whether its filters redacted anything: how many secrets were replaced in text, values masked,
+hashed or removed, and how many records were dropped whole. A target with filters that found nothing says so, and one
+without filters says it sent the data as received.
+
+To see the telemetry itself, set `liveContent: true` (Helm `live.content: true`, or `OTLP_ROUTER_LIVE_CONTENT=true`).
+The Live page then opens any of the latest 50 requests to show what the router received and what each target was
+given after its filters, so you can check a redaction worked. Requests of more than 500 items are not kept.
+
 ## Security
 
 - The UI and API need the admin login. Sessions are HTTP-only, `SameSite=Strict` cookies signed with
@@ -246,10 +255,11 @@ the page and keep nothing.
 - Expose the UI only on an internal network. The chart has separate ingresses for OTLP and the UI.
 - The router keeps the last few payloads per signal in memory for the filter preview. They can contain prompts, are
   shown only to the admin, and are never written to disk.
-- The Live page keeps request details only, never the telemetry: user email and device id from the agent's
-  headers, the ingest token's name, item counts, the 20 most frequent span, metric or event names, and delivery
-  errors. Replicas share them with each other only when
-  they present a token derived from `auth.sessionSecret`.
+- The Live page keeps request details only, never the telemetry, unless you turn on `liveContent`: user email and
+  device id from the agent's headers, the ingest token's name, item counts, the 20 most frequent span, metric or
+  event names, redaction counts, and delivery errors. With `liveContent` it also keeps the latest 50 requests as
+  received and as sent to each target, in memory only, shown only to the admin, and they can contain prompts. Replicas
+  share them with each other only when they present a token derived from `auth.sessionSecret`.
 - `/metrics` (Prometheus) is unauthenticated and exposes counters and target ids only.
 
 ## Development
